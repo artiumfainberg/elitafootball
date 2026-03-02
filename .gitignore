@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+training.db
+*.db
+*.sqlite
+*.sqlite3
