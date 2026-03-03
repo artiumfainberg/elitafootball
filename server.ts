@@ -9,10 +9,27 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- DB (use absolute path so it won't break on different working directories) ---
-const DB_PATH = process.env.DB_PATH ? process.env.DB_PATH : path.join(__dirname, "training.db");
+// --- DB (works locally + Railway) ---
+// Recommended on Railway: set DB_PATH to something like: /data/training.db (with a Volume mounted to /data)
+// If you DON'T have a Volume yet, you can temporarily use: /tmp/training.db (data will NOT persist)
+
+const DB_PATH =
+  (process.env.DB_PATH && String(process.env.DB_PATH).trim()) ||
+  path.join(__dirname, "training.db");
+
+// Ensure the folder exists (fixes: "Cannot open database because the directory does not exist")
+const DB_DIR = path.dirname(DB_PATH);
+try {
+  // Node 22 supports recursive mkdir
+  await import("fs").then((fs) => fs.mkdirSync(DB_DIR, { recursive: true }));
+} catch (e) {
+  console.error("[DB] Failed creating DB directory:", DB_DIR, e);
+}
+
 const db = new Database(DB_PATH);
 db.exec("PRAGMA foreign_keys = ON;");
+
+console.log("[DB] Using DB_PATH:", DB_PATH);
 
 // Initialize Database
 db.exec(`
