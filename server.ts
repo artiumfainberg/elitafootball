@@ -10,10 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- DB (use absolute path so it won't break on different working directories) ---
-const DB_PATH = (process.env.DB_PATH && String(process.env.DB_PATH).trim())
-  ? String(process.env.DB_PATH).trim()
-  : path.join(__dirname, "training.db");
-
+const DB_PATH = process.env.DB_PATH ? process.env.DB_PATH : path.join(__dirname, "training.db");
 const db = new Database(DB_PATH);
 db.exec("PRAGMA foreign_keys = ON;");
 
