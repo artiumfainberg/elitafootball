@@ -43,15 +43,15 @@ db.exec(`
     endTime TEXT NOT NULL
   );
 
+  -- ✅ weekly_trainees upgraded: isPaid + paymentType + amount_agorot
   CREATE TABLE IF NOT EXISTS weekly_trainees (
     slotId INTEGER NOT NULL,
     traineeId INTEGER NOT NULL,
     date TEXT NOT NULL, -- YYYY-MM-DD
 
-    -- NEW (for payment in schedule)
-    isPaid INTEGER DEFAULT 0, -- 0 = unpaid, 1 = paid
-    paymentType TEXT, -- 'cash' | 'link'
-    paid_amount_agorot INTEGER DEFAULT 0, -- paid amount in agorot
+    isPaid INTEGER DEFAULT 0, -- 0=לא שילם, 1=שילם
+    paymentType TEXT,         -- 'cash' | 'link'
+    amount_agorot INTEGER DEFAULT 0, -- סכום באגורות (למשל 12000)
 
     PRIMARY KEY (slotId, traineeId, date),
     FOREIGN KEY (slotId) REFERENCES schedule_slots(id) ON DELETE CASCADE,
@@ -75,11 +75,22 @@ db.exec(`
   );
 `);
 
-// --- MIGRATIONS ---
+// --- Migrations ---
 
 // Migration: Add amount_agorot column to debts if it doesn't exist
 try {
   db.prepare("ALTER TABLE debts ADD COLUMN amount_agorot INTEGER DEFAULT 0").run();
+} catch {}
+
+// ✅ Migration: weekly_trainees payment columns (safe if already exist)
+try {
+  db.prepare("ALTER TABLE weekly_trainees ADD COLUMN isPaid INTEGER DEFAULT 0").run();
+} catch {}
+try {
+  db.prepare("ALTER TABLE weekly_trainees ADD COLUMN paymentType TEXT").run();
+} catch {}
+try {
+  db.prepare("ALTER TABLE weekly_trainees ADD COLUMN amount_agorot INTEGER DEFAULT 0").run();
 } catch {}
 
 // Data Migration: If old 'amount' column exists, migrate to amount_agorot
@@ -94,11 +105,6 @@ try {
 } catch (e) {
   console.error("Migration error:", e);
 }
-
-// NEW migrations for weekly_trainees payment fields
-try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN isPaid INTEGER DEFAULT 0").run(); } catch {}
-try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN paymentType TEXT").run(); } catch {}
-try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN paid_amount_agorot INTEGER DEFAULT 0").run(); } catch {}
 
 // Seed default slots if empty
 const slotCount = db.prepare("SELECT COUNT(*) as count FROM schedule_slots").get() as { count: number };
@@ -117,6 +123,11 @@ const toInt = (v: any) => {
   return Number.isFinite(n) ? n : NaN;
 };
 
+const toAgorot = (amount: any) => {
+  const n = typeof amount === "number" ? amount : parseFloat(String(amount ?? "0").replace(",", "."));
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+};
+
 async function startServer() {
   const app = express();
 
@@ -131,12 +142,8 @@ async function startServer() {
   app.use(
     cors({
       origin: (origin, cb) => {
-        // allow server-to-server / curl / postman
         if (!origin) return cb(null, true);
-
-        // If not set -> allow all (handy for dev)
         if (!allowedOrigins) return cb(null, true);
-
         return allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("Not allowed by CORS"));
       },
       credentials: true,
@@ -292,7 +299,7 @@ async function startServer() {
     }
 
     try {
-      // Insert with defaults (unpaid)
+      // defaults: isPaid=0, paymentType=null, amount_agorot=0
       db.prepare("INSERT INTO weekly_trainees (slotId, traineeId, date) VALUES (?, ?, ?)").run(slotId, traineeId, date);
       res.json({ success: true });
     } catch {
@@ -330,50 +337,56 @@ async function startServer() {
     }
   });
 
-  // NEW: Update payment status directly in schedule (weekly_trainees)
-  app.put("/api/weekly/payment", (req, res) => {
+  // ✅ NEW: mark paid/unpaid + store payment info
+  app.post("/api/weekly/payment", (req, res) => {
     const slotId = toInt(req.body?.slotId);
     const traineeId = toInt(req.body?.traineeId);
     const date = req.body?.date;
 
-    const rawIsPaid = req.body?.isPaid;
-    const isPaid = rawIsPaid === 1 || rawIsPaid === true ? 1 : 0;
+    const isPaidRaw = req.body?.isPaid;
+    const isPaid = isPaidRaw === true || isPaidRaw === 1 || isPaidRaw === "1";
 
-    const paymentType = req.body?.paymentType != null ? String(req.body.paymentType) : null; // 'cash'|'link'|null
-    const amount = req.body?.amount; // shekels number
-    const amountNum = typeof amount === "number" ? amount : parseFloat(String(amount ?? "0"));
-    const amountAgorot = Number.isFinite(amountNum) ? Math.round(amountNum * 100) : 0;
+    const paymentType = req.body?.paymentType != null ? String(req.body.paymentType).trim() : null; // 'cash' | 'link'
+    const amount = req.body?.amount; // in shekels
+    const amountAgorot = amount !== undefined ? toAgorot(amount) : null;
 
     if (isNaN(slotId) || isNaN(traineeId) || !isYYYYMMDD(date)) {
       return res.status(400).json({ error: "Invalid data" });
     }
-
-    if (isPaid === 1) {
-      if (!paymentType || !["cash", "link"].includes(paymentType)) {
-        return res.status(400).json({ error: "paymentType must be 'cash' or 'link' when paid" });
-      }
-      if (amountAgorot <= 0) {
-        return res.status(400).json({ error: "amount must be > 0 when paid" });
-      }
+    if (paymentType && paymentType !== "cash" && paymentType !== "link") {
+      return res.status(400).json({ error: "paymentType must be cash/link" });
+    }
+    if (amountAgorot !== null && amountAgorot < 0) {
+      return res.status(400).json({ error: "amount invalid" });
     }
 
-    const result = db.prepare(`
+    const existing = db
+      .prepare("SELECT * FROM weekly_trainees WHERE slotId = ? AND traineeId = ? AND date = ?")
+      .get(slotId, traineeId, date) as any;
+
+    if (!existing) return res.status(404).json({ error: "Weekly assignment not found" });
+
+    // if marking paid and no amount given -> default 12000
+    const finalAmountAgorot =
+      isPaid
+        ? (amountAgorot !== null ? amountAgorot : (existing.amount_agorot > 0 ? existing.amount_agorot : 12000))
+        : 0;
+
+    db.prepare(`
       UPDATE weekly_trainees
-      SET isPaid = ?, paymentType = ?, paid_amount_agorot = ?
+      SET
+        isPaid = ?,
+        paymentType = ?,
+        amount_agorot = ?
       WHERE slotId = ? AND traineeId = ? AND date = ?
     `).run(
-      isPaid,
-      isPaid ? paymentType : null,
-      isPaid ? amountAgorot : 0,
+      isPaid ? 1 : 0,
+      isPaid ? (paymentType || existing.paymentType || null) : null,
+      finalAmountAgorot,
       slotId,
       traineeId,
       date
     );
-
-    if (result.changes === 0) {
-      // record not found (maybe not assigned)
-      return res.status(404).json({ error: "Weekly assignment not found" });
-    }
 
     res.json({ success: true });
   });
@@ -403,8 +416,7 @@ async function startServer() {
     const finalDate = isYYYYMMDD(date) ? date : new Date().toISOString().slice(0, 10);
 
     const amount = req.body?.amount;
-    const amountNum = typeof amount === "number" ? amount : parseFloat(String(amount ?? "0"));
-    const amountAgorot = Number.isFinite(amountNum) ? Math.round(amountNum * 100) : 0;
+    const amountAgorot = toAgorot(amount);
 
     if (isNaN(traineeId)) return res.status(400).json({ error: "traineeId לא תקין" });
 
@@ -429,9 +441,7 @@ async function startServer() {
     const amount = req.body?.amount;
 
     const amountAgorot =
-      amount !== undefined
-        ? Math.round((typeof amount === "number" ? amount : parseFloat(String(amount))) * 100)
-        : existing.amount_agorot;
+      amount !== undefined ? toAgorot(amount) : existing.amount_agorot;
 
     db.prepare("UPDATE debts SET status = ?, paymentType = ?, notes = ?, date = ?, amount_agorot = ? WHERE id = ?").run(
       status !== undefined ? status : existing.status,
@@ -458,8 +468,10 @@ async function startServer() {
 
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids missing" });
 
-    const amountNum = amount !== undefined ? (typeof amount === "number" ? amount : parseFloat(String(amount))) : NaN;
-    const amountAgorot = amount !== undefined && Number.isFinite(amountNum) ? Math.round(amountNum * 100) : null;
+    const amountAgorot =
+      amount !== undefined && Number.isFinite(parseFloat(String(amount)))
+        ? Math.round(parseFloat(String(amount)) * 100)
+        : null;
 
     const stmt = db.prepare(`
       UPDATE debts
@@ -483,7 +495,7 @@ async function startServer() {
     res.json({ success: true, count: ids.length });
   });
 
-  // Reset Logic Trigger
+  // ✅ Reset Logic Trigger (Saturday or force)
   app.post("/api/reset-check", (req, res) => {
     const now = new Date();
     const israelTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
@@ -506,6 +518,7 @@ async function startServer() {
           INSERT INTO debts (traineeId, date, status, paymentType, amount_agorot, notes)
           VALUES (?, ?, ?, ?, ?, ?)
         `);
+
         const deleteWeekly = db.prepare("DELETE FROM weekly_trainees");
 
         const transaction = db.transaction(() => {
@@ -513,13 +526,14 @@ async function startServer() {
             const paid = Number(item.isPaid) === 1;
 
             if (paid) {
+              const amt = Number(item.amount_agorot) > 0 ? Number(item.amount_agorot) : 12000;
               insertDebt.run(
                 item.traineeId,
                 item.date,
                 "paid",
-                item.paymentType ?? null,
-                Number(item.paid_amount_agorot) > 0 ? Number(item.paid_amount_agorot) : 12000,
-                "Paid from schedule"
+                item.paymentType || null,
+                amt,
+                "שולם דרך הלו״ז"
               );
             } else {
               insertDebt.run(
@@ -528,7 +542,7 @@ async function startServer() {
                 "unpaid",
                 null,
                 12000,
-                "Unpaid from schedule"
+                "חוב מאימון בלו״ז"
               );
             }
           }

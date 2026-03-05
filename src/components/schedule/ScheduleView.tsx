@@ -2,9 +2,8 @@ import React from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, RefreshCw } from 'lucide-react';
 import { Slot, WeeklyAssignment } from '../../types';
 import { SlotCard } from './SlotCard';
-import { formatDate, getDayName, DAYS_HEBREW } from '../../utils/dateUtils';
+import { formatDate, DAYS_HEBREW } from '../../utils/dateUtils';
 import { cn } from '../../utils/formatUtils';
-import { motion } from 'motion/react';
 
 interface ScheduleViewProps {
   weekDays: Date[];
@@ -19,6 +18,9 @@ interface ScheduleViewProps {
   onDeleteSlot: (slotId: number) => void;
   onAddSlot: () => void;
   onManualReset: () => void;
+
+  // ✅ NEW: payment click
+  onPayClick: (assignment: WeeklyAssignment) => void;
 }
 
 export const ScheduleView: React.FC<ScheduleViewProps> = ({
@@ -34,6 +36,7 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
   onDeleteSlot,
   onAddSlot,
   onManualReset,
+  onPayClick,
 }) => {
   const [selectedDayIdx, setSelectedDayIdx] = React.useState(() => {
     const today = new Date();
@@ -99,8 +102,8 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
               onClick={() => setSelectedDayIdx(idx)}
               className={cn(
                 "flex-shrink-0 flex flex-col items-center justify-center w-14 h-20 rounded-2xl transition-all border",
-                selectedDayIdx === idx 
-                  ? "bg-luxury-black border-luxury-black text-gold-400 shadow-lg scale-105" 
+                selectedDayIdx === idx
+                  ? "bg-luxury-black border-luxury-black text-gold-400 shadow-lg scale-105"
                   : "bg-luxury-white border-gold-100 text-slate-400"
               )}
             >
@@ -121,8 +124,8 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
             const isVisible = selectedDayIdx === idx;
 
             return (
-              <div 
-                key={dateStr} 
+              <div
+                key={dateStr}
                 className={cn(
                   "flex flex-col gap-4",
                   !isVisible && "hidden md:flex"
@@ -148,6 +151,7 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
                       onUnassign={onUnassign}
                       onCancel={onCancel}
                       onDelete={onDeleteSlot}
+                      onPayClick={onPayClick} // ✅ NEW
                     />
                   ))}
                   {daySlots.length === 0 && (

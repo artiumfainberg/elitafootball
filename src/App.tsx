@@ -6,7 +6,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 
 // Types
 import { 
@@ -20,7 +20,7 @@ import { useWeek } from './hooks/useWeek';
 import { useDebts } from './hooks/useDebts';
 
 // Utils
-import { formatDate, getWeekRange } from './utils/dateUtils';
+import { formatDate } from './utils/dateUtils';
 import { roundTo2, buildPaymentNotes } from './utils/formatUtils';
 
 // Components
@@ -37,7 +37,12 @@ import { AssignModal } from './components/schedule/AssignModal';
 import { PaymentDetailsModal } from './components/payments/PaymentDetailsModal';
 import { TraineePickerModal } from './components/common/TraineePickerModal';
 
+// ✅ NEW
+import { PaymentModal } from './components/schedule/PaymentModal';
+
 const LS_LAST_AMOUNT = 'elita_last_payment_amount';
+
+type PaymentMethod = 'cash' | 'link';
 
 const App: React.FC = () => {
   const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('elita_auth_token'));
@@ -63,14 +68,22 @@ const App: React.FC = () => {
   const [showAssignModal, setShowAssignModal] = useState<{ open: boolean; slotId?: number; date?: string }>({ open: false });
   const [showPaymentDetailsModal, setShowPaymentDetailsModal] = useState<{ open: boolean; debt?: Debt }>({ open: false });
   const [showTraineePicker, setShowTraineePicker] = useState(false);
-  
+
   const [confirmState, setConfirmState] = useState<ConfirmState>({ open: false, message: '' });
+
   const [payModal, setPayModal] = useState<PayModalState>({
     open: false, title: 'סגירת תשלום', ids: [], debtsCount: 0, mode: 'cash', amount: '', link: '',
   });
+
   const [inputModal, setInputModal] = useState<InputModalState>({
     open: false, title: '', showDate: false, showAmount: false,
   });
+
+  // ✅ NEW: schedule payment modal state
+  const [schedulePaymentModal, setSchedulePaymentModal] = useState<{
+    open: boolean;
+    assignment?: WeeklyAssignment;
+  }>({ open: false });
 
   const fetchData = async () => {
     if (!isLoggedIn) return;
@@ -104,7 +117,6 @@ const App: React.FC = () => {
       api.auth.resetCheck().catch(() => {});
       fetchData();
 
-      // Auto-refresh every 60 seconds
       const interval = setInterval(fetchData, 60000);
       return () => clearInterval(interval);
     }
@@ -118,6 +130,32 @@ const App: React.FC = () => {
   const handleLogout = () => {
     localStorage.removeItem('elita_auth_token');
     setIsLoggedIn(false);
+  };
+
+  // ✅ NEW: update paid/unpaid for weekly schedule (server endpoint we will add)
+  const updateWeeklyPayment = async (params: {
+    slotId: number;
+    traineeId: number;
+    date: string;
+    isPaid: boolean;
+    amount?: number;
+    paymentType?: PaymentMethod;
+  }) => {
+    const token = localStorage.getItem('elita_auth_token') || '';
+    const res = await fetch('/api/weekly/payment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(params),
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(txt || 'Failed updating payment');
+    }
+    return res.json().catch(() => ({}));
   };
 
   // --- Actions ---
@@ -295,6 +333,65 @@ const App: React.FC = () => {
     });
   };
 
+  // ✅ NEW: handle pay click from schedule
+  const handleSchedulePayClick = (assignment: WeeklyAssignment) => {
+    const paid = Number((assignment as any).isPaid) === 1;
+
+    if (paid) {
+      setConfirmState({
+        open: true,
+        title: 'ביטול סימון תשלום',
+        message: `להחזיר את ${assignment.firstName} ${assignment.lastName} ל"לא שילם"?`,
+        destructive: true,
+        confirmText: 'הפוך ללא שילם',
+        onConfirm: async () => {
+          try {
+            await updateWeeklyPayment({
+              slotId: assignment.slotId,
+              traineeId: assignment.traineeId,
+              date: assignment.date,
+              isPaid: false,
+            });
+            await fetchData();
+            toast.success('עודכן ל"לא שילם"');
+          } catch (e: any) {
+            toast.error('שגיאה בעדכון תשלום');
+          } finally {
+            setConfirmState({ open: false, message: '' });
+          }
+        },
+      });
+      return;
+    }
+
+    setSchedulePaymentModal({ open: true, assignment });
+  };
+
+  const closeSchedulePaymentModal = () => {
+    setSchedulePaymentModal({ open: false, assignment: undefined });
+  };
+
+  const confirmSchedulePayment = async (amount: number, method: PaymentMethod) => {
+    const a = schedulePaymentModal.assignment;
+    if (!a) return;
+
+    try {
+      await updateWeeklyPayment({
+        slotId: a.slotId,
+        traineeId: a.traineeId,
+        date: a.date,
+        isPaid: true,
+        amount,
+        paymentType: method,
+      });
+      await fetchData();
+      toast.success('סומן כשילם');
+      closeSchedulePaymentModal();
+    } catch (e: any) {
+      toast.error('שגיאה בעדכון תשלום (בדוק שהשרת עודכן)');
+    }
+  };
+
   if (!isLoggedIn) {
     return (
       <>
@@ -312,10 +409,14 @@ const App: React.FC = () => {
     ? debts.filter(d => d.traineeId === showPaymentDetailsModal.debt?.traineeId && d.status === 'unpaid')
     : [];
 
+  const schedulePaymentTraineeName = schedulePaymentModal.assignment
+    ? `${schedulePaymentModal.assignment.firstName} ${schedulePaymentModal.assignment.lastName}`
+    : '';
+
   return (
     <div className="min-h-screen bg-luxury-cream text-luxury-black font-sans flex flex-col selection:bg-gold-100" dir="rtl">
       <Toaster position="top-center" richColors />
-      
+
       {/* Sync Status Bar */}
       <div className="bg-luxury-black text-[10px] text-gold-400/60 py-1 px-4 flex justify-between items-center border-b border-gold-900/20">
         <div className="flex items-center gap-1.5">
@@ -336,7 +437,7 @@ const App: React.FC = () => {
           </button>
         </div>
       </div>
-      
+
       {loading && !lastSynced && (
         <div className="fixed inset-0 bg-luxury-cream/50 backdrop-blur-sm z-[100] flex items-center justify-center">
           <RefreshCw className="text-gold-500 animate-spin" size={40} />
@@ -358,6 +459,7 @@ const App: React.FC = () => {
             onDeleteSlot={handleDeleteSlot}
             onAddSlot={() => setShowSlotModal({ open: true })}
             onManualReset={handleManualReset}
+            onPayClick={handleSchedulePayClick} // ✅ NEW
           />
         )}
 
@@ -408,7 +510,16 @@ const App: React.FC = () => {
       <ConfirmModal state={confirmState} onClose={() => setConfirmState(p => ({ ...p, open: false }))} />
       <InputModal state={inputModal} onClose={() => setInputModal(p => ({ ...p, open: false }))} setState={setInputModal} />
       <PayModal state={payModal} onClose={() => setPayModal(p => ({ ...p, open: false }))} setState={setPayModal} onSubmit={submitPayModal} />
-      
+
+      {/* ✅ NEW: schedule payment modal */}
+      <PaymentModal
+        open={schedulePaymentModal.open}
+        onClose={closeSchedulePaymentModal}
+        onConfirm={confirmSchedulePayment}
+        traineeName={schedulePaymentTraineeName}
+        defaultAmount={Number(localStorage.getItem(LS_LAST_AMOUNT) || '120')}
+      />
+
       <TraineeModal 
         isOpen={showTraineeModal.open} 
         onClose={() => setShowTraineeModal({ open: false })} 
