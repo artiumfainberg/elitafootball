@@ -10,17 +10,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- DB (works locally + Railway) ---
-// Recommended on Railway: set DB_PATH to something like: /data/training.db (with a Volume mounted to /data)
-// If you DON'T have a Volume yet, you can temporarily use: /tmp/training.db (data will NOT persist)
-
 const DB_PATH =
   (process.env.DB_PATH && String(process.env.DB_PATH).trim()) ||
   path.join(__dirname, "training.db");
 
-// Ensure the folder exists (fixes: "Cannot open database because the directory does not exist")
+// Ensure the folder exists
 const DB_DIR = path.dirname(DB_PATH);
 try {
-  // Node 22 supports recursive mkdir
   await import("fs").then((fs) => fs.mkdirSync(DB_DIR, { recursive: true }));
 } catch (e) {
   console.error("[DB] Failed creating DB directory:", DB_DIR, e);
@@ -28,7 +24,6 @@ try {
 
 const db = new Database(DB_PATH);
 db.exec("PRAGMA foreign_keys = ON;");
-
 console.log("[DB] Using DB_PATH:", DB_PATH);
 
 // Initialize Database
@@ -52,6 +47,12 @@ db.exec(`
     slotId INTEGER NOT NULL,
     traineeId INTEGER NOT NULL,
     date TEXT NOT NULL, -- YYYY-MM-DD
+
+    -- NEW (for payment in schedule)
+    isPaid INTEGER DEFAULT 0, -- 0 = unpaid, 1 = paid
+    paymentType TEXT, -- 'cash' | 'link'
+    paid_amount_agorot INTEGER DEFAULT 0, -- paid amount in agorot
+
     PRIMARY KEY (slotId, traineeId, date),
     FOREIGN KEY (slotId) REFERENCES schedule_slots(id) ON DELETE CASCADE,
     FOREIGN KEY (traineeId) REFERENCES trainees(id) ON DELETE CASCADE
@@ -74,6 +75,8 @@ db.exec(`
   );
 `);
 
+// --- MIGRATIONS ---
+
 // Migration: Add amount_agorot column to debts if it doesn't exist
 try {
   db.prepare("ALTER TABLE debts ADD COLUMN amount_agorot INTEGER DEFAULT 0").run();
@@ -91,6 +94,11 @@ try {
 } catch (e) {
   console.error("Migration error:", e);
 }
+
+// NEW migrations for weekly_trainees payment fields
+try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN isPaid INTEGER DEFAULT 0").run(); } catch {}
+try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN paymentType TEXT").run(); } catch {}
+try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN paid_amount_agorot INTEGER DEFAULT 0").run(); } catch {}
 
 // Seed default slots if empty
 const slotCount = db.prepare("SELECT COUNT(*) as count FROM schedule_slots").get() as { count: number };
@@ -112,10 +120,25 @@ const toInt = (v: any) => {
 async function startServer() {
   const app = express();
 
-  // CORS (safe default: allow all in dev, restrict in prod via env)
+  // --- CORS ---
+  // In production: restrict to CORS_ORIGIN if provided
+  // In dev: allow all
+  const corsOriginEnv = (process.env.CORS_ORIGIN || "").trim();
+  const allowedOrigins = corsOriginEnv
+    ? corsOriginEnv.split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
+
   app.use(
     cors({
-      origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim()) : true,
+      origin: (origin, cb) => {
+        // allow server-to-server / curl / postman
+        if (!origin) return cb(null, true);
+
+        // If not set -> allow all (handy for dev)
+        if (!allowedOrigins) return cb(null, true);
+
+        return allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("Not allowed by CORS"));
+      },
       credentials: true,
     })
   );
@@ -123,13 +146,9 @@ async function startServer() {
   app.use(express.json({ limit: "1mb" }));
 
   // --- Auth config ---
-  // If you have .env:
-  // ADMIN_PASSWORD=2468
-  // AUTH_TOKEN=some-random-string
   const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "2468");
   const AUTH_TOKEN = String(process.env.AUTH_TOKEN || "elita-secret-token-123");
 
-  // Optional debug (you can delete this line later)
   console.log("[AUTH] ADMIN_PASSWORD loaded? =", ADMIN_PASSWORD ? "YES" : "NO");
 
   const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -141,13 +160,11 @@ async function startServer() {
   // Public Routes
   app.post("/api/login", (req, res) => {
     const password = String(req.body?.password || "");
-    if (password === ADMIN_PASSWORD) {
-      return res.json({ token: AUTH_TOKEN });
-    }
+    if (password === ADMIN_PASSWORD) return res.json({ token: AUTH_TOKEN });
     return res.status(401).json({ error: "סיסמה שגויה" });
   });
 
-  // Protected Routes (everything under /api except /api/login)
+  // Protected Routes
   app.use("/api", (req, res, next) => {
     if (req.path === "/login") return next();
     return authMiddleware(req, res, next);
@@ -167,9 +184,7 @@ async function startServer() {
     const phone = req.body?.phone != null ? String(req.body.phone).trim() : null;
     const notes = req.body?.notes != null ? String(req.body.notes).trim() : null;
 
-    if (!firstName || !lastName) {
-      return res.status(400).json({ error: "חסרים firstName/lastName" });
-    }
+    if (!firstName || !lastName) return res.status(400).json({ error: "חסרים firstName/lastName" });
 
     const result = db
       .prepare("INSERT INTO trainees (firstName, lastName, phone, notes) VALUES (?, ?, ?, ?)")
@@ -187,9 +202,7 @@ async function startServer() {
     const phone = req.body?.phone != null ? String(req.body.phone).trim() : null;
     const notes = req.body?.notes != null ? String(req.body.notes).trim() : null;
 
-    if (!firstName || !lastName) {
-      return res.status(400).json({ error: "חסרים firstName/lastName" });
-    }
+    if (!firstName || !lastName) return res.status(400).json({ error: "חסרים firstName/lastName" });
 
     db.prepare("UPDATE trainees SET firstName = ?, lastName = ?, phone = ?, notes = ? WHERE id = ?").run(
       firstName,
@@ -238,7 +251,6 @@ async function startServer() {
     try {
       db.exec("PRAGMA foreign_keys = ON;");
       const result = db.prepare("DELETE FROM schedule_slots WHERE id = ?").run(id);
-
       const updatedSlots = db.prepare("SELECT * FROM schedule_slots ORDER BY dayOfWeek, startTime").all();
       res.json({ success: true, deleted: result.changes, slots: updatedSlots });
     } catch (e: any) {
@@ -280,6 +292,7 @@ async function startServer() {
     }
 
     try {
+      // Insert with defaults (unpaid)
       db.prepare("INSERT INTO weekly_trainees (slotId, traineeId, date) VALUES (?, ?, ?)").run(slotId, traineeId, date);
       res.json({ success: true });
     } catch {
@@ -315,6 +328,54 @@ async function startServer() {
       console.error("[SERVER] Cancel session error:", e);
       res.status(500).json({ error: `שגיאת שרת בביטול אימון: ${e.message}` });
     }
+  });
+
+  // NEW: Update payment status directly in schedule (weekly_trainees)
+  app.put("/api/weekly/payment", (req, res) => {
+    const slotId = toInt(req.body?.slotId);
+    const traineeId = toInt(req.body?.traineeId);
+    const date = req.body?.date;
+
+    const rawIsPaid = req.body?.isPaid;
+    const isPaid = rawIsPaid === 1 || rawIsPaid === true ? 1 : 0;
+
+    const paymentType = req.body?.paymentType != null ? String(req.body.paymentType) : null; // 'cash'|'link'|null
+    const amount = req.body?.amount; // shekels number
+    const amountNum = typeof amount === "number" ? amount : parseFloat(String(amount ?? "0"));
+    const amountAgorot = Number.isFinite(amountNum) ? Math.round(amountNum * 100) : 0;
+
+    if (isNaN(slotId) || isNaN(traineeId) || !isYYYYMMDD(date)) {
+      return res.status(400).json({ error: "Invalid data" });
+    }
+
+    if (isPaid === 1) {
+      if (!paymentType || !["cash", "link"].includes(paymentType)) {
+        return res.status(400).json({ error: "paymentType must be 'cash' or 'link' when paid" });
+      }
+      if (amountAgorot <= 0) {
+        return res.status(400).json({ error: "amount must be > 0 when paid" });
+      }
+    }
+
+    const result = db.prepare(`
+      UPDATE weekly_trainees
+      SET isPaid = ?, paymentType = ?, paid_amount_agorot = ?
+      WHERE slotId = ? AND traineeId = ? AND date = ?
+    `).run(
+      isPaid,
+      isPaid ? paymentType : null,
+      isPaid ? amountAgorot : 0,
+      slotId,
+      traineeId,
+      date
+    );
+
+    if (result.changes === 0) {
+      // record not found (maybe not assigned)
+      return res.status(404).json({ error: "Weekly assignment not found" });
+    }
+
+    res.json({ success: true });
   });
 
   // Debts / Payments
@@ -395,9 +456,7 @@ async function startServer() {
   app.post("/api/debts/bulk-update", (req, res) => {
     const { ids, status, paymentType, notes, date, amount } = req.body;
 
-    if (!Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ error: "ids missing" });
-    }
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids missing" });
 
     const amountNum = amount !== undefined ? (typeof amount === "number" ? amount : parseFloat(String(amount))) : NaN;
     const amountAgorot = amount !== undefined && Number.isFinite(amountNum) ? Math.round(amountNum * 100) : null;
@@ -416,9 +475,7 @@ async function startServer() {
     const tx = db.transaction(() => {
       for (const rawId of ids) {
         const id = toInt(rawId);
-        if (!isNaN(id)) {
-          stmt.run(status ?? null, paymentType ?? null, notes ?? null, date ?? null, amountAgorot, id);
-        }
+        if (!isNaN(id)) stmt.run(status ?? null, paymentType ?? null, notes ?? null, date ?? null, amountAgorot, id);
       }
     });
 
@@ -436,23 +493,46 @@ async function startServer() {
     const todayStr = israelTime.toISOString().slice(0, 10);
 
     if (day === 6 || isForce) {
-      const lastReset = db.prepare("SELECT value FROM config WHERE key = 'last_reset_date'").get() as { value: string } | undefined;
+      const lastReset = db.prepare("SELECT value FROM config WHERE key = 'last_reset_date'").get() as
+        | { value: string }
+        | undefined;
 
       if (isForce || !lastReset || lastReset.value !== todayStr) {
         const weekly = db.prepare("SELECT * FROM weekly_trainees").all() as any[];
 
-        if (weekly.length === 0 && !isForce) {
-          return res.json({ resetPerformed: false, message: "No activity to reset" });
-        }
+        if (weekly.length === 0 && !isForce) return res.json({ resetPerformed: false, message: "No activity to reset" });
 
-        // 120₪ default = 12000 agorot
-        const insertDebt = db.prepare("INSERT INTO debts (traineeId, date, amount_agorot) VALUES (?, ?, 12000)");
+        const insertDebt = db.prepare(`
+          INSERT INTO debts (traineeId, date, status, paymentType, amount_agorot, notes)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `);
         const deleteWeekly = db.prepare("DELETE FROM weekly_trainees");
 
         const transaction = db.transaction(() => {
           for (const item of weekly) {
-            insertDebt.run(item.traineeId, item.date);
+            const paid = Number(item.isPaid) === 1;
+
+            if (paid) {
+              insertDebt.run(
+                item.traineeId,
+                item.date,
+                "paid",
+                item.paymentType ?? null,
+                Number(item.paid_amount_agorot) > 0 ? Number(item.paid_amount_agorot) : 12000,
+                "Paid from schedule"
+              );
+            } else {
+              insertDebt.run(
+                item.traineeId,
+                item.date,
+                "unpaid",
+                null,
+                12000,
+                "Unpaid from schedule"
+              );
+            }
           }
+
           deleteWeekly.run();
           db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES ('last_reset_date', ?)").run(todayStr);
         });
@@ -479,10 +559,15 @@ async function startServer() {
     });
   }
 
+  // --- IMPORTANT FOR RAILWAY ---
   const PORT = Number(process.env.PORT || 3000);
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`DB: ${DB_PATH}`);
+  const HOST = "0.0.0.0";
+
+  app.listen(PORT, HOST, () => {
+    console.log(`[SERVER] Listening on http://${HOST}:${PORT}`);
+    console.log(`[SERVER] NODE_ENV=${process.env.NODE_ENV}`);
+    console.log(`[SERVER] CORS_ORIGIN=${process.env.CORS_ORIGIN || "(not set)"}`);
+    console.log(`[SERVER] DB=${DB_PATH}`);
   });
 }
 

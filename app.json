@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "2a835e8e-6e52-407f-8175-f98710ffaacb"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.fainberg.elitafootball",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}
