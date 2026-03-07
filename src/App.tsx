@@ -55,7 +55,7 @@ const App: React.FC = () => {
   const [weeklyAssignments, setWeeklyAssignments] = useState<WeeklyAssignment[]>([]);
   const [debts, setDebts] = useState<Debt[]>([]);
 
-  // ✅ NEW: locations + selectedLocation
+  // locations + selectedLocation
   const [locations, setLocations] = useState<Location[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
 
@@ -98,7 +98,7 @@ const App: React.FC = () => {
         api.trainees.getAll(),
         api.slots.getAll(),
         api.debts.getAll(),
-        api.locations.getAll(), // ✅ NEW
+        api.locations.getAll(),
       ]);
 
       setTrainees(tRes || []);
@@ -108,11 +108,9 @@ const App: React.FC = () => {
       const locs = (lRes || []) as Location[];
       setLocations(locs);
 
-      // אם אין בחירה עדיין, תבחר מגרש ראשון
       if (!selectedLocation && locs.length > 0) {
         setSelectedLocation(locs[0]);
       } else if (selectedLocation && locs.length > 0) {
-        // אם המגרש שנבחר נמחק/לא קיים - fallback
         const stillExists = locs.some((x) => x.id === selectedLocation.id);
         if (!stillExists) setSelectedLocation(locs[0]);
       }
@@ -123,7 +121,7 @@ const App: React.FC = () => {
       const aRes = await api.weekly.get(formatDate(currentWeekStart), formatDate(end));
       setWeeklyAssignments(aRes || []);
     } catch (e) {
-      // Error handled by useApi
+      // handled by useApi
     } finally {
       setLoading(false);
       setLastSynced(new Date());
@@ -208,7 +206,7 @@ const App: React.FC = () => {
     });
   };
 
-  // ✅ Updated: ensure locationId on new slot
+  // ensure locationId on new slot
   const handleAddSlot = async (data: Partial<Slot>) => {
     const payload: any = {
       ...data,
@@ -462,6 +460,15 @@ const App: React.FC = () => {
         </div>
       </div>
 
+      {/* ✅ NAV MOVED UP (sticky top) */}
+      <nav className="bg-luxury-white sticky top-0 border-b border-gold-100 py-1 px-4 shadow-[0_4px_20px_rgba(0,0,0,0.05)] z-50">
+        <div className="max-w-md mx-auto flex justify-around items-center">
+          <NavButton id="schedule" icon={Calendar} label="לו״ז" active={activeTab === 'schedule'} onClick={() => setActiveTab('schedule')} />
+          <NavButton id="payments" icon={CreditCard} label="תשלומים" active={activeTab === 'payments'} onClick={() => setActiveTab('payments')} />
+          <NavButton id="trainees" icon={Users} label="מתאמנים" active={activeTab === 'trainees'} onClick={() => setActiveTab('trainees')} />
+        </div>
+      </nav>
+
       {loading && !lastSynced && (
         <div className="fixed inset-0 bg-luxury-cream/50 backdrop-blur-sm z-[100] flex items-center justify-center">
           <RefreshCw className="text-gold-500 animate-spin" size={40} />
@@ -484,8 +491,6 @@ const App: React.FC = () => {
             onAddSlot={() => setShowSlotModal({ open: true })}
             onManualReset={handleManualReset}
             onPayClick={handleSchedulePayClick}
-
-            // ✅ NEW props for locations
             locations={locations}
             selectedLocation={selectedLocation}
             onSelectLocation={setSelectedLocation}
@@ -526,15 +531,6 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Bottom Navigation */}
-      <nav className="bg-luxury-white border-t border-gold-100 pb-safe pt-2 px-4 shadow-[0_-4px_20px_rgba(0,0,0,0.03)] z-50">
-        <div className="max-w-md mx-auto flex justify-around items-center">
-          <NavButton id="schedule" icon={Calendar} label="לו״ז" active={activeTab === 'schedule'} onClick={() => setActiveTab('schedule')} />
-          <NavButton id="payments" icon={CreditCard} label="תשלומים" active={activeTab === 'payments'} onClick={() => setActiveTab('payments')} />
-          <NavButton id="trainees" icon={Users} label="מתאמנים" active={activeTab === 'trainees'} onClick={() => setActiveTab('trainees')} />
-        </div>
-      </nav>
-
       {/* Modals */}
       <ConfirmModal state={confirmState} onClose={() => setConfirmState(p => ({ ...p, open: false }))} />
       <InputModal state={inputModal} onClose={() => setInputModal(p => ({ ...p, open: false }))} setState={setInputModal} />
@@ -558,13 +554,13 @@ const App: React.FC = () => {
         }}
       />
 
-      <SlotModal 
-  isOpen={showSlotModal.open}
-  onClose={() => setShowSlotModal({ open: false })}
-  onSubmit={handleAddSlot}
-  locations={locations}
-  selectedLocationId={selectedLocation?.id ?? 1}
-/>
+      <SlotModal
+        isOpen={showSlotModal.open}
+        onClose={() => setShowSlotModal({ open: false })}
+        onSubmit={handleAddSlot}
+        locations={locations}
+        selectedLocationId={selectedLocation?.id ?? 1}
+      />
 
       <AssignModal
         isOpen={showAssignModal.open}
