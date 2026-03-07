@@ -6,19 +6,33 @@ export interface Trainee {
   notes?: string;
 }
 
+/** ✅ New: Location (migrash) */
+export interface Location {
+  id: number;
+  name: string;
+}
+
 export interface Slot {
   id: number;
   dayOfWeek: number;
   startTime: string;
   endTime: string;
+
+  /** ✅ New: which location this slot belongs to */
+  locationId: number;
 }
 
 export interface WeeklyAssignment {
   slotId: number;
   traineeId: number;
-  date: string;
+  date: string; // YYYY-MM-DD
   firstName?: string;
   lastName?: string;
+
+  /** ✅ From weekly_trainees (wt.*) */
+  isPaid?: number; // 0/1
+  paymentType?: 'cash' | 'link' | null;
+  amount_agorot?: number; // e.g. 12000
 }
 
 export interface Debt {
@@ -27,7 +41,7 @@ export interface Debt {
   date: string;
   status: 'unpaid' | 'paid';
   paymentType?: 'cash' | 'link';
-  amount: number; // Stored in agorot/cents (integer) ideally, but currently float in DB. I will migrate it to integer.
+  amount: number; // server returns d.amount_agorot / 100.0 as amount (shekels)
   notes?: string;
   firstName?: string;
   lastName?: string;

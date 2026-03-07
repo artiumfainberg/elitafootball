@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Calendar,
   CreditCard,
@@ -9,9 +9,10 @@ import { Toaster, toast } from 'sonner';
 import { motion } from 'motion/react';
 
 // Types
-import { 
-  Trainee, Slot, WeeklyAssignment, Debt, 
-  ActiveTab, PaymentTab, ConfirmState, PayModalState, InputModalState 
+import {
+  Trainee, Slot, WeeklyAssignment, Debt,
+  ActiveTab, PaymentTab, ConfirmState, PayModalState, InputModalState,
+  Location
 } from './types';
 
 // Hooks
@@ -37,7 +38,7 @@ import { AssignModal } from './components/schedule/AssignModal';
 import { PaymentDetailsModal } from './components/payments/PaymentDetailsModal';
 import { TraineePickerModal } from './components/common/TraineePickerModal';
 
-// ✅ NEW
+// Payment in schedule
 import { PaymentModal } from './components/schedule/PaymentModal';
 
 const LS_LAST_AMOUNT = 'elita_last_payment_amount';
@@ -53,6 +54,10 @@ const App: React.FC = () => {
   const [slots, setSlots] = useState<Slot[]>([]);
   const [weeklyAssignments, setWeeklyAssignments] = useState<WeeklyAssignment[]>([]);
   const [debts, setDebts] = useState<Debt[]>([]);
+
+  // ✅ NEW: locations + selectedLocation
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
 
   const { currentWeekStart, weekDays, nextWeek, prevWeek, goToToday } = useWeek();
   const api = useApi();
@@ -79,7 +84,7 @@ const App: React.FC = () => {
     open: false, title: '', showDate: false, showAmount: false,
   });
 
-  // ✅ NEW: schedule payment modal state
+  // Payment-in-schedule modal
   const [schedulePaymentModal, setSchedulePaymentModal] = useState<{
     open: boolean;
     assignment?: WeeklyAssignment;
@@ -89,15 +94,28 @@ const App: React.FC = () => {
     if (!isLoggedIn) return;
     setLoading(true);
     try {
-      const [tRes, sRes, dRes] = await Promise.all([
+      const [tRes, sRes, dRes, lRes] = await Promise.all([
         api.trainees.getAll(),
         api.slots.getAll(),
-        api.debts.getAll()
+        api.debts.getAll(),
+        api.locations.getAll(), // ✅ NEW
       ]);
 
       setTrainees(tRes || []);
       setSlots(sRes || []);
       setDebts(dRes || []);
+
+      const locs = (lRes || []) as Location[];
+      setLocations(locs);
+
+      // אם אין בחירה עדיין, תבחר מגרש ראשון
+      if (!selectedLocation && locs.length > 0) {
+        setSelectedLocation(locs[0]);
+      } else if (selectedLocation && locs.length > 0) {
+        // אם המגרש שנבחר נמחק/לא קיים - fallback
+        const stillExists = locs.some((x) => x.id === selectedLocation.id);
+        if (!stillExists) setSelectedLocation(locs[0]);
+      }
 
       const end = new Date(currentWeekStart);
       end.setDate(currentWeekStart.getDate() + 6);
@@ -120,6 +138,7 @@ const App: React.FC = () => {
       const interval = setInterval(fetchData, 60000);
       return () => clearInterval(interval);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn, currentWeekStart]);
 
   const handleLogin = (token: string) => {
@@ -132,7 +151,7 @@ const App: React.FC = () => {
     setIsLoggedIn(false);
   };
 
-  // ✅ NEW: update paid/unpaid for weekly schedule (server endpoint we will add)
+  // update paid/unpaid for weekly schedule
   const updateWeeklyPayment = async (params: {
     slotId: number;
     traineeId: number;
@@ -189,8 +208,13 @@ const App: React.FC = () => {
     });
   };
 
+  // ✅ Updated: ensure locationId on new slot
   const handleAddSlot = async (data: Partial<Slot>) => {
-    await api.slots.create(data);
+    const payload: any = {
+      ...data,
+      locationId: (data as any)?.locationId ?? selectedLocation?.id ?? 1,
+    };
+    await api.slots.create(payload);
     await fetchData();
     setShowSlotModal({ open: false });
     toast.success('משבצת נוספה');
@@ -333,7 +357,7 @@ const App: React.FC = () => {
     });
   };
 
-  // ✅ NEW: handle pay click from schedule
+  // Pay click from schedule
   const handleSchedulePayClick = (assignment: WeeklyAssignment) => {
     const paid = Number((assignment as any).isPaid) === 1;
 
@@ -354,7 +378,7 @@ const App: React.FC = () => {
             });
             await fetchData();
             toast.success('עודכן ל"לא שילם"');
-          } catch (e: any) {
+          } catch {
             toast.error('שגיאה בעדכון תשלום');
           } finally {
             setConfirmState({ open: false, message: '' });
@@ -387,7 +411,7 @@ const App: React.FC = () => {
       await fetchData();
       toast.success('סומן כשילם');
       closeSchedulePaymentModal();
-    } catch (e: any) {
+    } catch {
       toast.error('שגיאה בעדכון תשלום (בדוק שהשרת עודכן)');
     }
   };
@@ -401,7 +425,7 @@ const App: React.FC = () => {
     );
   }
 
-  const paymentDetailsTrainee = showPaymentDetailsModal.debt 
+  const paymentDetailsTrainee = showPaymentDetailsModal.debt
     ? trainees.find(t => t.id === showPaymentDetailsModal.debt?.traineeId) || null
     : null;
 
@@ -427,8 +451,8 @@ const App: React.FC = () => {
           {lastSynced && (
             <span>סונכרן לאחרונה: {lastSynced.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</span>
           )}
-          <button 
-            onClick={() => fetchData()} 
+          <button
+            onClick={() => fetchData()}
             className="hover:text-gold-400 transition-colors flex items-center gap-1"
             disabled={loading}
           >
@@ -446,7 +470,7 @@ const App: React.FC = () => {
 
       <main className="flex-1 flex flex-col">
         {activeTab === 'schedule' && (
-          <ScheduleView 
+          <ScheduleView
             weekDays={weekDays}
             slots={slots}
             assignments={weeklyAssignments}
@@ -459,12 +483,17 @@ const App: React.FC = () => {
             onDeleteSlot={handleDeleteSlot}
             onAddSlot={() => setShowSlotModal({ open: true })}
             onManualReset={handleManualReset}
-            onPayClick={handleSchedulePayClick} // ✅ NEW
+            onPayClick={handleSchedulePayClick}
+
+            // ✅ NEW props for locations
+            locations={locations}
+            selectedLocation={selectedLocation}
+            onSelectLocation={setSelectedLocation}
           />
         )}
 
         {activeTab === 'payments' && (
-          <PaymentsView 
+          <PaymentsView
             activeTab={paymentTab}
             onTabChange={setPaymentTab}
             unpaidDebts={unpaidDebtsByTrainee}
@@ -486,7 +515,7 @@ const App: React.FC = () => {
         )}
 
         {activeTab === 'trainees' && (
-          <TraineesView 
+          <TraineesView
             trainees={trainees.filter(t => `${t.firstName} ${t.lastName}`.toLowerCase().includes(searchQuery.toLowerCase()))}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
@@ -511,7 +540,6 @@ const App: React.FC = () => {
       <InputModal state={inputModal} onClose={() => setInputModal(p => ({ ...p, open: false }))} setState={setInputModal} />
       <PayModal state={payModal} onClose={() => setPayModal(p => ({ ...p, open: false }))} setState={setPayModal} onSubmit={submitPayModal} />
 
-      {/* ✅ NEW: schedule payment modal */}
       <PaymentModal
         open={schedulePaymentModal.open}
         onClose={closeSchedulePaymentModal}
@@ -520,9 +548,9 @@ const App: React.FC = () => {
         defaultAmount={Number(localStorage.getItem(LS_LAST_AMOUNT) || '120')}
       />
 
-      <TraineeModal 
-        isOpen={showTraineeModal.open} 
-        onClose={() => setShowTraineeModal({ open: false })} 
+      <TraineeModal
+        isOpen={showTraineeModal.open}
+        onClose={() => setShowTraineeModal({ open: false })}
         trainee={showTraineeModal.trainee}
         onSubmit={async (data) => {
           if (showTraineeModal.trainee) await handleUpdateTrainee(showTraineeModal.trainee.id, data);
@@ -531,19 +559,21 @@ const App: React.FC = () => {
       />
 
       <SlotModal 
-        isOpen={showSlotModal.open}
-        onClose={() => setShowSlotModal({ open: false })}
-        onSubmit={handleAddSlot}
-      />
+  isOpen={showSlotModal.open}
+  onClose={() => setShowSlotModal({ open: false })}
+  onSubmit={handleAddSlot}
+  locations={locations}
+  selectedLocationId={selectedLocation?.id ?? 1}
+/>
 
-      <AssignModal 
+      <AssignModal
         isOpen={showAssignModal.open}
         onClose={() => setShowAssignModal({ open: false })}
         trainees={trainees}
         onAssign={handleAssignTrainee}
       />
 
-      <PaymentDetailsModal 
+      <PaymentDetailsModal
         isOpen={showPaymentDetailsModal.open}
         onClose={() => setShowPaymentDetailsModal({ open: false })}
         trainee={paymentDetailsTrainee}

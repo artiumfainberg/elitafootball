@@ -36,11 +36,19 @@ db.exec(`
     notes TEXT
   );
 
+  -- ✅ New: locations
+  CREATE TABLE IF NOT EXISTS locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+  );
+
   CREATE TABLE IF NOT EXISTS schedule_slots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     dayOfWeek INTEGER NOT NULL, -- 0=Sunday, 6=Saturday
     startTime TEXT NOT NULL,
-    endTime TEXT NOT NULL
+    endTime TEXT NOT NULL,
+    locationId INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (locationId) REFERENCES locations(id) ON DELETE RESTRICT
   );
 
   -- ✅ weekly_trainees upgraded: isPaid + paymentType + amount_agorot
@@ -83,15 +91,20 @@ try {
 } catch {}
 
 // ✅ Migration: weekly_trainees payment columns (safe if already exist)
-try {
-  db.prepare("ALTER TABLE weekly_trainees ADD COLUMN isPaid INTEGER DEFAULT 0").run();
-} catch {}
-try {
-  db.prepare("ALTER TABLE weekly_trainees ADD COLUMN paymentType TEXT").run();
-} catch {}
-try {
-  db.prepare("ALTER TABLE weekly_trainees ADD COLUMN amount_agorot INTEGER DEFAULT 0").run();
-} catch {}
+try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN isPaid INTEGER DEFAULT 0").run(); } catch {}
+try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN paymentType TEXT").run(); } catch {}
+try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN amount_agorot INTEGER DEFAULT 0").run(); } catch {}
+
+// ✅ Migration: schedule_slots locationId (safe)
+try { db.prepare("ALTER TABLE schedule_slots ADD COLUMN locationId INTEGER NOT NULL DEFAULT 1").run(); } catch {}
+
+// Ensure locations table exists (safe if already exists)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+  );
+`);
 
 // Data Migration: If old 'amount' column exists, migrate to amount_agorot
 try {
@@ -106,13 +119,22 @@ try {
   console.error("Migration error:", e);
 }
 
+// ✅ Seed default locations if empty
+const locCount = db.prepare("SELECT COUNT(*) as count FROM locations").get() as { count: number };
+if (locCount.count === 0) {
+  const ins = db.prepare("INSERT INTO locations (name) VALUES (?)");
+  ins.run("מגדל העמק");
+  ins.run("יזרעאל");
+  ins.run("חיפה");
+}
+
 // Seed default slots if empty
 const slotCount = db.prepare("SELECT COUNT(*) as count FROM schedule_slots").get() as { count: number };
 if (slotCount.count === 0) {
-  const insertSlot = db.prepare("INSERT INTO schedule_slots (dayOfWeek, startTime, endTime) VALUES (?, ?, ?)");
+  const insertSlot = db.prepare("INSERT INTO schedule_slots (dayOfWeek, startTime, endTime, locationId) VALUES (?, ?, ?, ?)");
   for (let day = 0; day < 7; day++) {
-    insertSlot.run(day, "16:00", "17:00");
-    insertSlot.run(day, "17:00", "18:00");
+    insertSlot.run(day, "16:00", "17:00", 1);
+    insertSlot.run(day, "17:00", "18:00", 1);
   }
 }
 
@@ -132,8 +154,6 @@ async function startServer() {
   const app = express();
 
   // --- CORS ---
-  // In production: restrict to CORS_ORIGIN if provided
-  // In dev: allow all
   const corsOriginEnv = (process.env.CORS_ORIGIN || "").trim();
   const allowedOrigins = corsOriginEnv
     ? corsOriginEnv.split(",").map((s) => s.trim()).filter(Boolean)
@@ -178,6 +198,12 @@ async function startServer() {
   });
 
   // --- API Routes ---
+
+  // ✅ Locations
+  app.get("/api/locations", (_req, res) => {
+    const locations = db.prepare("SELECT * FROM locations ORDER BY id").all();
+    res.json(locations);
+  });
 
   // Trainees
   app.get("/api/trainees", (_req, res) => {
@@ -240,13 +266,15 @@ async function startServer() {
     const dayOfWeek = toInt(req.body?.dayOfWeek);
     const startTime = String(req.body?.startTime || "").trim();
     const endTime = String(req.body?.endTime || "").trim();
+    const locationId = toInt(req.body?.locationId ?? 1);
 
     if (isNaN(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) return res.status(400).json({ error: "dayOfWeek לא תקין" });
     if (!startTime || !endTime) return res.status(400).json({ error: "startTime/endTime חסרים" });
+    if (isNaN(locationId) || locationId <= 0) return res.status(400).json({ error: "locationId לא תקין" });
 
     const result = db
-      .prepare("INSERT INTO schedule_slots (dayOfWeek, startTime, endTime) VALUES (?, ?, ?)")
-      .run(dayOfWeek, startTime, endTime);
+      .prepare("INSERT INTO schedule_slots (dayOfWeek, startTime, endTime, locationId) VALUES (?, ?, ?, ?)")
+      .run(dayOfWeek, startTime, endTime, locationId);
 
     res.json({ id: result.lastInsertRowid });
   });
@@ -299,7 +327,6 @@ async function startServer() {
     }
 
     try {
-      // defaults: isPaid=0, paymentType=null, amount_agorot=0
       db.prepare("INSERT INTO weekly_trainees (slotId, traineeId, date) VALUES (?, ?, ?)").run(slotId, traineeId, date);
       res.json({ success: true });
     } catch {
@@ -337,7 +364,7 @@ async function startServer() {
     }
   });
 
-  // ✅ NEW: mark paid/unpaid + store payment info
+  // mark paid/unpaid + store payment info
   app.post("/api/weekly/payment", (req, res) => {
     const slotId = toInt(req.body?.slotId);
     const traineeId = toInt(req.body?.traineeId);
@@ -346,8 +373,8 @@ async function startServer() {
     const isPaidRaw = req.body?.isPaid;
     const isPaid = isPaidRaw === true || isPaidRaw === 1 || isPaidRaw === "1";
 
-    const paymentType = req.body?.paymentType != null ? String(req.body.paymentType).trim() : null; // 'cash' | 'link'
-    const amount = req.body?.amount; // in shekels
+    const paymentType = req.body?.paymentType != null ? String(req.body.paymentType).trim() : null;
+    const amount = req.body?.amount;
     const amountAgorot = amount !== undefined ? toAgorot(amount) : null;
 
     if (isNaN(slotId) || isNaN(traineeId) || !isYYYYMMDD(date)) {
@@ -366,7 +393,6 @@ async function startServer() {
 
     if (!existing) return res.status(404).json({ error: "Weekly assignment not found" });
 
-    // if marking paid and no amount given -> default 12000
     const finalAmountAgorot =
       isPaid
         ? (amountAgorot !== null ? amountAgorot : (existing.amount_agorot > 0 ? existing.amount_agorot : 12000))
@@ -374,10 +400,7 @@ async function startServer() {
 
     db.prepare(`
       UPDATE weekly_trainees
-      SET
-        isPaid = ?,
-        paymentType = ?,
-        amount_agorot = ?
+      SET isPaid = ?, paymentType = ?, amount_agorot = ?
       WHERE slotId = ? AND traineeId = ? AND date = ?
     `).run(
       isPaid ? 1 : 0,
@@ -440,8 +463,7 @@ async function startServer() {
     const date = req.body?.date;
     const amount = req.body?.amount;
 
-    const amountAgorot =
-      amount !== undefined ? toAgorot(amount) : existing.amount_agorot;
+    const amountAgorot = amount !== undefined ? toAgorot(amount) : existing.amount_agorot;
 
     db.prepare("UPDATE debts SET status = ?, paymentType = ?, notes = ?, date = ?, amount_agorot = ? WHERE id = ?").run(
       status !== undefined ? status : existing.status,
@@ -495,7 +517,7 @@ async function startServer() {
     res.json({ success: true, count: ids.length });
   });
 
-  // ✅ Reset Logic Trigger (Saturday or force)
+  // Reset Logic Trigger (Saturday or force)
   app.post("/api/reset-check", (req, res) => {
     const now = new Date();
     const israelTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
@@ -527,23 +549,9 @@ async function startServer() {
 
             if (paid) {
               const amt = Number(item.amount_agorot) > 0 ? Number(item.amount_agorot) : 12000;
-              insertDebt.run(
-                item.traineeId,
-                item.date,
-                "paid",
-                item.paymentType || null,
-                amt,
-                "שולם דרך הלו״ז"
-              );
+              insertDebt.run(item.traineeId, item.date, "paid", item.paymentType || null, amt, "שולם דרך הלו״ז");
             } else {
-              insertDebt.run(
-                item.traineeId,
-                item.date,
-                "unpaid",
-                null,
-                12000,
-                "חוב מאימון בלו״ז"
-              );
+              insertDebt.run(item.traineeId, item.date, "unpaid", null, 12000, "חוב מאימון בלו״ז");
             }
           }
 

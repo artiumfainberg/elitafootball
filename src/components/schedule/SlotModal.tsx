@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal } from '../common/Modal';
-import { Slot } from '../../types';
+import { Slot, Location } from '../../types';
 import { DAYS_HEBREW } from '../../utils/dateUtils';
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'));
@@ -11,16 +11,20 @@ interface SlotModalProps {
   onClose: () => void;
   slot?: Slot;
   onSubmit: (data: Partial<Slot>) => Promise<void>;
+
+  /** ✅ New */
+  locations: Location[];
+  selectedLocationId: number; // fallback/default
 }
 
-const TimeSelect = ({ 
-  label, 
-  value, 
-  onChange 
-}: { 
-  label: string; 
-  value: string; 
-  onChange: (val: string) => void 
+const TimeSelect = ({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: string;
+  onChange: (val: string) => void
 }) => {
   const [h, m] = (value || '00:00').split(':');
 
@@ -61,24 +65,39 @@ export const SlotModal: React.FC<SlotModalProps> = ({
   onClose,
   slot,
   onSubmit,
+  locations,
+  selectedLocationId,
 }) => {
   const [formData, setFormData] = useState<Partial<Slot>>({
     dayOfWeek: 0,
     startTime: '16:00',
     endTime: '17:00',
+    locationId: selectedLocationId,
   });
 
   useEffect(() => {
     if (slot) {
       setFormData(slot);
     } else {
-      setFormData({ dayOfWeek: 0, startTime: '16:00', endTime: '17:00' });
+      setFormData({
+        dayOfWeek: 0,
+        startTime: '16:00',
+        endTime: '17:00',
+        locationId: selectedLocationId,
+      });
     }
-  }, [slot, isOpen]);
+  }, [slot, isOpen, selectedLocationId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await onSubmit(formData);
+
+    // guarantee locationId
+    const locationId = (formData as any).locationId ?? selectedLocationId;
+
+    await onSubmit({
+      ...formData,
+      locationId,
+    });
   };
 
   return (
@@ -88,6 +107,29 @@ export const SlotModal: React.FC<SlotModalProps> = ({
       title={slot ? 'עריכת משבצת' : 'משבצת חדשה'}
     >
       <form onSubmit={handleSubmit} className="space-y-5">
+        {/* Location */}
+        <div>
+          <label className="block text-[11px] font-extrabold text-gold-500 uppercase tracking-[0.2em] mb-2">
+            מגרש
+          </label>
+
+          <select
+            value={(formData as any).locationId ?? selectedLocationId}
+            onChange={(e) => setFormData((p) => ({ ...p, locationId: Number(e.target.value) } as any))}
+            className="w-full bg-gold-50/30 border border-gold-100 rounded-2xl py-3 px-5 focus:ring-4 focus:ring-gold-500/5 focus:border-gold-400 outline-none font-bold transition-all"
+          >
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.id}>
+                {loc.name}
+              </option>
+            ))}
+          </select>
+
+          {locations.length === 0 && (
+            <div className="text-xs text-slate-400 italic mt-2">אין מגרשים (בדוק את השרת)</div>
+          )}
+        </div>
+
         <div>
           <label className="block text-[11px] font-extrabold text-gold-500 uppercase tracking-[0.2em] mb-2">יום בשבוע</label>
           <select

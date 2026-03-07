@@ -1,6 +1,6 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, RefreshCw } from 'lucide-react';
-import { Slot, WeeklyAssignment } from '../../types';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, RefreshCw, MapPin } from 'lucide-react';
+import { Slot, WeeklyAssignment, Location } from '../../types';
 import { SlotCard } from './SlotCard';
 import { formatDate, DAYS_HEBREW } from '../../utils/dateUtils';
 import { cn } from '../../utils/formatUtils';
@@ -19,8 +19,13 @@ interface ScheduleViewProps {
   onAddSlot: () => void;
   onManualReset: () => void;
 
-  // ✅ NEW: payment click
+  // payment click
   onPayClick: (assignment: WeeklyAssignment) => void;
+
+  // ✅ NEW: locations
+  locations: Location[];
+  selectedLocation: Location | null;
+  onSelectLocation: (loc: Location) => void;
 }
 
 export const ScheduleView: React.FC<ScheduleViewProps> = ({
@@ -37,6 +42,10 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
   onAddSlot,
   onManualReset,
   onPayClick,
+
+  locations,
+  selectedLocation,
+  onSelectLocation,
 }) => {
   const [selectedDayIdx, setSelectedDayIdx] = React.useState(() => {
     const today = new Date();
@@ -49,10 +58,16 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
     return idx === -1 ? 0 : idx;
   });
 
+  // ✅ Filter slots by selected location
+  const filteredSlots = React.useMemo(() => {
+    if (!selectedLocation) return slots;
+    return slots.filter((s) => s.locationId === selectedLocation.id);
+  }, [slots, selectedLocation]);
+
   return (
     <div className="flex-1 overflow-auto p-4 md:p-8 pb-24 md:pb-8">
       <div className="max-w-7xl mx-auto">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 md:mb-12">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-6 md:mb-10">
           <div>
             <h1 className="serif text-3xl md:text-4xl font-bold text-luxury-black mb-1 md:mb-2">לוח אימונים</h1>
             <p className="text-slate-500 font-medium italic serif text-sm md:text-base">ניהול שיבוצים שבועי</p>
@@ -94,6 +109,38 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
           </div>
         </div>
 
+        {/* ✅ Locations selector */}
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-3 text-gold-700">
+            <MapPin size={16} />
+            <span className="text-[10px] font-extrabold uppercase tracking-[0.2em]">מגרש</span>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {locations.length === 0 && (
+              <div className="text-slate-400 text-xs italic">אין מגרשים במערכת</div>
+            )}
+
+            {locations.map((loc) => {
+              const active = selectedLocation?.id === loc.id;
+              return (
+                <button
+                  key={loc.id}
+                  onClick={() => onSelectLocation(loc)}
+                  className={cn(
+                    "px-4 py-2 rounded-full border text-[10px] font-extrabold uppercase tracking-widest transition-all",
+                    active
+                      ? "bg-luxury-black border-luxury-black text-gold-400 shadow-lg"
+                      : "bg-luxury-white border-gold-100 text-slate-500 hover:bg-gold-50"
+                  )}
+                >
+                  {loc.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Mobile Day Selector */}
         <div className="flex md:hidden overflow-x-auto no-scrollbar gap-2 mb-8 pb-2">
           {weekDays.map((day, idx) => (
@@ -120,7 +167,7 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-7 gap-6">
           {weekDays.map((day, idx) => {
             const dateStr = formatDate(day);
-            const daySlots = slots.filter((s) => s.dayOfWeek === idx);
+            const daySlots = filteredSlots.filter((s) => s.dayOfWeek === idx);
             const isVisible = selectedDayIdx === idx;
 
             return (
@@ -151,9 +198,10 @@ export const ScheduleView: React.FC<ScheduleViewProps> = ({
                       onUnassign={onUnassign}
                       onCancel={onCancel}
                       onDelete={onDeleteSlot}
-                      onPayClick={onPayClick} // ✅ NEW
+                      onPayClick={onPayClick}
                     />
                   ))}
+
                   {daySlots.length === 0 && (
                     <div className="py-12 md:py-8 text-center text-slate-300 italic text-sm md:text-xs serif bg-luxury-white/30 rounded-3xl border border-dashed border-gold-100">
                       אין משבצות ליום זה
