@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Modal } from '../common/Modal';
 import { Trainee } from '../../types';
 import { Search, UserPlus } from 'lucide-react';
@@ -8,6 +8,9 @@ interface AssignModalProps {
   onClose: () => void;
   trainees: Trainee[];
   onAssign: (traineeId: number) => Promise<void>;
+
+  // ✅ NEW
+  onAddNewTrainee: () => void;
 }
 
 export const AssignModal: React.FC<AssignModalProps> = ({
@@ -15,13 +18,14 @@ export const AssignModal: React.FC<AssignModalProps> = ({
   onClose,
   trainees,
   onAssign,
+  onAddNewTrainee,
 }) => {
   const [search, setSearch] = useState('');
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return trainees.filter(t => 
-      `${t.firstName} ${t.lastName}`.toLowerCase().includes(q) || 
+    return trainees.filter(t =>
+      `${t.firstName} ${t.lastName}`.toLowerCase().includes(q) ||
       (t.phone || '').includes(search)
     );
   }, [trainees, search]);
@@ -32,16 +36,28 @@ export const AssignModal: React.FC<AssignModalProps> = ({
       onClose={onClose}
       title="שיבוץ מתאמן"
     >
-      <div className="relative mb-6">
-        <Search className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="חיפוש מתאמן..."
-          autoFocus
-          className="w-full bg-gold-50/30 border border-gold-100 rounded-2xl py-3 pr-12 pl-6 focus:ring-4 focus:ring-gold-500/5 focus:border-gold-400 outline-none font-bold transition-all"
-        />
+      {/* Search + quick add button */}
+      <div className="flex items-center gap-2 mb-6">
+        <div className="relative flex-1">
+          <Search className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="חיפוש מתאמן..."
+            autoFocus
+            className="w-full bg-gold-50/30 border border-gold-100 rounded-2xl py-3 pr-12 pl-6 focus:ring-4 focus:ring-gold-500/5 focus:border-gold-400 outline-none font-bold transition-all"
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={onAddNewTrainee}
+          className="shrink-0 w-12 h-12 rounded-2xl bg-luxury-black text-gold-400 hover:bg-gold-900 transition-all shadow-lg flex items-center justify-center active:scale-95"
+          title="הוסף מתאמן חדש"
+        >
+          <UserPlus size={18} />
+        </button>
       </div>
 
       <div className="space-y-2 pr-1">

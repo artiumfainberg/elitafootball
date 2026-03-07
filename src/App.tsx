@@ -90,6 +90,15 @@ const App: React.FC = () => {
     assignment?: WeeklyAssignment;
   }>({ open: false });
 
+  // ✅ NEW: Quick add from assign modal -> auto assign
+  const [isQuickAddFromAssign, setIsQuickAddFromAssign] = useState(false);
+  const [quickAssignTarget, setQuickAssignTarget] = useState<{ slotId: number; date: string } | null>(null);
+
+  const resetQuickAdd = () => {
+    setIsQuickAddFromAssign(false);
+    setQuickAssignTarget(null);
+  };
+
   const fetchData = async () => {
     if (!isLoggedIn) return;
     setLoading(true);
@@ -177,9 +186,36 @@ const App: React.FC = () => {
 
   // --- Actions ---
   const handleAddTrainee = async (data: Partial<Trainee>) => {
-    await api.trainees.create(data);
+    // ✅ return created id from API
+    const created = await api.trainees.create(data);
+    const newId = Number(created?.id);
+
     await fetchData();
+
+    // ✅ If we came from AssignModal -> auto assign
+    if (isQuickAddFromAssign && quickAssignTarget && Number.isFinite(newId) && newId > 0) {
+      try {
+        await api.weekly.assign({
+          slotId: quickAssignTarget.slotId,
+          traineeId: newId,
+          date: quickAssignTarget.date,
+        });
+
+        // close trainee modal, refresh & clean flags
+        setShowTraineeModal({ open: false });
+        resetQuickAdd();
+
+        await fetchData();
+        toast.success('מתאמן נוסף ושובץ אוטומטית ✅');
+        return;
+      } catch (e) {
+        // If assignment failed, still close modal and show trainee added
+        toast.error('המתאמן נוסף אבל השיבוץ נכשל (בדוק את הלו״ז)');
+      }
+    }
+
     setShowTraineeModal({ open: false });
+    resetQuickAdd();
     toast.success('מתאמן נוסף בהצלחה');
   };
 
@@ -187,6 +223,7 @@ const App: React.FC = () => {
     await api.trainees.update(id, data);
     await fetchData();
     setShowTraineeModal({ open: false });
+    resetQuickAdd();
     toast.success('מתאמן עודכן בהצלחה');
   };
 
@@ -239,6 +276,7 @@ const App: React.FC = () => {
     await api.weekly.assign({ slotId: showAssignModal.slotId, traineeId, date: showAssignModal.date });
     await fetchData();
     setShowAssignModal({ open: false });
+    resetQuickAdd();
     toast.success('שיבוץ בוצע');
   };
 
@@ -414,6 +452,23 @@ const App: React.FC = () => {
     }
   };
 
+  // ✅ NEW: Quick add handler from AssignModal
+  const handleAddNewTraineeFromAssign = () => {
+    if (!showAssignModal.slotId || !showAssignModal.date) {
+      toast.error('חסר יעד לשיבוץ');
+      return;
+    }
+
+    setQuickAssignTarget({ slotId: showAssignModal.slotId, date: showAssignModal.date });
+    setIsQuickAddFromAssign(true);
+
+    // close assign modal so it won't cover trainee modal
+    setShowAssignModal((p) => ({ ...p, open: false }));
+
+    // open trainee modal for new trainee
+    setShowTraineeModal({ open: true });
+  };
+
   if (!isLoggedIn) {
     return (
       <>
@@ -460,7 +515,7 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* ✅ NAV MOVED UP (sticky top) */}
+      {/* NAV (sticky top) */}
       <nav className="bg-luxury-white sticky top-0 border-b border-gold-100 py-1 px-4 shadow-[0_4px_20px_rgba(0,0,0,0.05)] z-50">
         <div className="max-w-md mx-auto flex justify-around items-center">
           <NavButton id="schedule" icon={Calendar} label="לו״ז" active={activeTab === 'schedule'} onClick={() => setActiveTab('schedule')} />
@@ -484,7 +539,10 @@ const App: React.FC = () => {
             onPrevWeek={prevWeek}
             onNextWeek={nextWeek}
             onToday={goToToday}
-            onAssign={(slotId, date) => setShowAssignModal({ open: true, slotId, date })}
+            onAssign={(slotId, date) => {
+              resetQuickAdd();
+              setShowAssignModal({ open: true, slotId, date });
+            }}
             onUnassign={handleUnassignTrainee}
             onCancel={handleCancelSession}
             onDeleteSlot={handleDeleteSlot}
@@ -524,8 +582,14 @@ const App: React.FC = () => {
             trainees={trainees.filter(t => `${t.firstName} ${t.lastName}`.toLowerCase().includes(searchQuery.toLowerCase()))}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
-            onAddTrainee={() => setShowTraineeModal({ open: true })}
-            onEditTrainee={(t) => setShowTraineeModal({ open: true, trainee: t })}
+            onAddTrainee={() => {
+              resetQuickAdd();
+              setShowTraineeModal({ open: true });
+            }}
+            onEditTrainee={(t) => {
+              resetQuickAdd();
+              setShowTraineeModal({ open: true, trainee: t });
+            }}
             onDeleteTrainee={handleDeleteTrainee}
           />
         )}
@@ -546,7 +610,10 @@ const App: React.FC = () => {
 
       <TraineeModal
         isOpen={showTraineeModal.open}
-        onClose={() => setShowTraineeModal({ open: false })}
+        onClose={() => {
+          setShowTraineeModal({ open: false });
+          resetQuickAdd();
+        }}
         trainee={showTraineeModal.trainee}
         onSubmit={async (data) => {
           if (showTraineeModal.trainee) await handleUpdateTrainee(showTraineeModal.trainee.id, data);
@@ -564,9 +631,13 @@ const App: React.FC = () => {
 
       <AssignModal
         isOpen={showAssignModal.open}
-        onClose={() => setShowAssignModal({ open: false })}
+        onClose={() => {
+          setShowAssignModal((p) => ({ ...p, open: false }));
+          // don't reset here automatically; only reset on trainee modal close or successful flow
+        }}
         trainees={trainees}
         onAssign={handleAssignTrainee}
+        onAddNewTrainee={handleAddNewTraineeFromAssign} // ✅ NEW
       />
 
       <PaymentDetailsModal
