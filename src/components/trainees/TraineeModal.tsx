@@ -45,14 +45,12 @@ export const TraineeModal: React.FC<TraineeModalProps> = ({
     notes: '',
   });
 
-  // ✅ Contact picker support
+  // Contact picker support
   const [isContactPickerSupported, setIsContactPickerSupported] = useState(false);
 
   useEffect(() => {
-    // check support when modal opens
     if (!isOpen) return;
 
-    // Web Contact Picker API (not supported everywhere)
     const supported =
       typeof navigator !== 'undefined' &&
       // @ts-ignore
@@ -76,24 +74,18 @@ export const TraineeModal: React.FC<TraineeModalProps> = ({
       // @ts-ignore
       const contactsApi = (navigator as any).contacts;
 
+      // ✅ On iPhone this is usually not supported (Safari/Chrome use WebKit)
       if (!contactsApi?.select) {
-        toast.error('המכשיר לא תומך בייבוא אנשי קשר');
+        toast.info('באייפון אין גישה לאנשי קשר דרך הדפדפן. טיפ: לחץ על שדה הטלפון ובחר איש קשר/הדבק מספר.');
         return;
       }
 
-      // request name + tel
       const result = await contactsApi.select(['name', 'tel'], { multiple: false });
-
       const c = Array.isArray(result) ? result[0] : null;
       if (!c) return;
 
-      const fullName =
-        (Array.isArray(c.name) ? c.name[0] : c.name) ||
-        '';
-
-      const tel =
-        (Array.isArray(c.tel) ? c.tel[0] : c.tel) ||
-        '';
+      const fullName = (Array.isArray(c.name) ? c.name[0] : c.name) || '';
+      const tel = (Array.isArray(c.tel) ? c.tel[0] : c.tel) || '';
 
       const { firstName, lastName } = splitName(fullName);
 
@@ -106,7 +98,6 @@ export const TraineeModal: React.FC<TraineeModalProps> = ({
 
       toast.success('פרטי איש קשר נטענו');
     } catch (e: any) {
-      // user cancelled usually throws
       if (String(e?.name || '').toLowerCase().includes('abort')) return;
       toast.error('לא הצלחנו לייבא אנשי קשר');
     }
@@ -125,12 +116,13 @@ export const TraineeModal: React.FC<TraineeModalProps> = ({
     >
       <form onSubmit={handleSubmit} className="space-y-5">
 
-        {/* ✅ Add from contacts (only new trainee + supported) */}
-        {!trainee && isContactPickerSupported && (
+        {/* ✅ Show always for NEW trainee. If unsupported, clicking explains what to do on iPhone */}
+        {!trainee && (
           <button
             type="button"
             onClick={handlePickContact}
             className="w-full flex items-center justify-center gap-2 py-3 px-5 bg-gold-50 text-gold-700 rounded-2xl border border-gold-200 font-extrabold text-[11px] uppercase tracking-widest hover:bg-gold-100 transition-all mb-2"
+            title={isContactPickerSupported ? 'ייבוא מאנשי קשר' : 'לא נתמך באייפון בדפדפן'}
           >
             <Contact size={16} />
             הוספה מאנשי קשר
@@ -165,7 +157,14 @@ export const TraineeModal: React.FC<TraineeModalProps> = ({
             value={formData.phone || ''}
             onChange={(e) => setFormData((p) => ({ ...p, phone: e.target.value }))}
             className="w-full bg-gold-50/30 border border-gold-100 rounded-2xl py-3 px-5 focus:ring-4 focus:ring-gold-500/5 focus:border-gold-400 outline-none font-bold transition-all"
+            placeholder="לדוגמה: 0501234567"
           />
+          {/* little tip for iPhone users */}
+          {!trainee && !isContactPickerSupported && (
+            <div className="mt-2 text-[11px] text-slate-400 italic">
+              באייפון: אפשר ללחוץ בשדה הטלפון ולבחור/להדביק מספר מאיש קשר.
+            </div>
+          )}
         </div>
 
         <div>
