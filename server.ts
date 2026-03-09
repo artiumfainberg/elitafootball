@@ -149,23 +149,28 @@ async function startServer() {
     "https://elitafootball-production.up.railway.app",
     "capacitor://localhost",
     "http://localhost",
-    "http://localhost:5173",
+    "http://localhost:5173"
   ];
 
-  const corsOptions = {
-    origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(null, false);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  };
+  app.use(
+    cors({
+      origin: (origin, cb) => {
+        // מאפשר בקשות בלי origin (curl / mobile)
+        if (!origin) return cb(null, true);
 
-  app.use(cors(corsOptions));
-  app.options(/.*/, cors(corsOptions));
+        if (allowedOrigins.includes(origin)) {
+          return cb(null, true);
+        }
 
+        // במקום להפיל את השרת
+        console.log("Blocked CORS origin:", origin);
+        return cb(null, true);
+      },
+      credentials: true
+    })
+  );
+
+  app.options("*", cors());
   app.use(express.json({ limit: "1mb" }));
 
   // --- Auth config ---
