@@ -36,7 +36,6 @@ db.exec(`
     notes TEXT
   );
 
-  -- ✅ New: locations
   CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE
@@ -44,23 +43,20 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS schedule_slots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    dayOfWeek INTEGER NOT NULL, -- 0=Sunday, 6=Saturday
+    dayOfWeek INTEGER NOT NULL,
     startTime TEXT NOT NULL,
     endTime TEXT NOT NULL,
     locationId INTEGER NOT NULL DEFAULT 1,
     FOREIGN KEY (locationId) REFERENCES locations(id) ON DELETE RESTRICT
   );
 
-  -- ✅ weekly_trainees upgraded: isPaid + paymentType + amount_agorot
   CREATE TABLE IF NOT EXISTS weekly_trainees (
     slotId INTEGER NOT NULL,
     traineeId INTEGER NOT NULL,
-    date TEXT NOT NULL, -- YYYY-MM-DD
-
-    isPaid INTEGER DEFAULT 0, -- 0=לא שילם, 1=שילם
-    paymentType TEXT,         -- 'cash' | 'link'
-    amount_agorot INTEGER DEFAULT 0, -- סכום באגורות (למשל 12000)
-
+    date TEXT NOT NULL,
+    isPaid INTEGER DEFAULT 0,
+    paymentType TEXT,
+    amount_agorot INTEGER DEFAULT 0,
     PRIMARY KEY (slotId, traineeId, date),
     FOREIGN KEY (slotId) REFERENCES schedule_slots(id) ON DELETE CASCADE,
     FOREIGN KEY (traineeId) REFERENCES trainees(id) ON DELETE CASCADE
@@ -70,8 +66,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     traineeId INTEGER NOT NULL,
     date TEXT NOT NULL,
-    status TEXT DEFAULT 'unpaid', -- 'unpaid', 'paid'
-    paymentType TEXT, -- 'cash', 'link'
+    status TEXT DEFAULT 'unpaid',
+    paymentType TEXT,
     amount_agorot INTEGER DEFAULT 0,
     notes TEXT,
     FOREIGN KEY (traineeId) REFERENCES trainees(id) ON DELETE CASCADE
@@ -84,21 +80,16 @@ db.exec(`
 `);
 
 // --- Migrations ---
-
-// Migration: Add amount_agorot column to debts if it doesn't exist
 try {
   db.prepare("ALTER TABLE debts ADD COLUMN amount_agorot INTEGER DEFAULT 0").run();
 } catch {}
 
-// ✅ Migration: weekly_trainees payment columns (safe if already exist)
 try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN isPaid INTEGER DEFAULT 0").run(); } catch {}
 try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN paymentType TEXT").run(); } catch {}
 try { db.prepare("ALTER TABLE weekly_trainees ADD COLUMN amount_agorot INTEGER DEFAULT 0").run(); } catch {}
 
-// ✅ Migration: schedule_slots locationId (safe)
 try { db.prepare("ALTER TABLE schedule_slots ADD COLUMN locationId INTEGER NOT NULL DEFAULT 1").run(); } catch {}
 
-// Ensure locations table exists (safe if already exists)
 db.exec(`
   CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,7 +97,6 @@ db.exec(`
   );
 `);
 
-// Data Migration: If old 'amount' column exists, migrate to amount_agorot
 try {
   const cols = db.prepare("PRAGMA table_info(debts)").all() as any[];
   const hasAmount = cols.some((c) => c.name === "amount");
@@ -119,7 +109,7 @@ try {
   console.error("Migration error:", e);
 }
 
-// ✅ Seed default locations if empty
+// Seed default locations if empty
 const locCount = db.prepare("SELECT COUNT(*) as count FROM locations").get() as { count: number };
 if (locCount.count === 0) {
   const ins = db.prepare("INSERT INTO locations (name) VALUES (?)");
@@ -138,8 +128,9 @@ if (slotCount.count === 0) {
   }
 }
 
-// --- small helpers ---
+// --- helpers ---
 const isYYYYMMDD = (s: any) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+
 const toInt = (v: any) => {
   const n = typeof v === "number" ? v : parseInt(String(v), 10);
   return Number.isFinite(n) ? n : NaN;
@@ -154,21 +145,26 @@ async function startServer() {
   const app = express();
 
   // --- CORS ---
-  const corsOriginEnv = (process.env.CORS_ORIGIN || "").trim();
-  const allowedOrigins = corsOriginEnv
-    ? corsOriginEnv.split(",").map((s) => s.trim()).filter(Boolean)
-    : null;
+  const allowedOrigins = [
+    "https://elitafootball-production.up.railway.app",
+    "capacitor://localhost",
+    "http://localhost",
+    "http://localhost:5173",
+  ];
 
-  app.use(
-    cors({
-      origin: (origin, cb) => {
-        if (!origin) return cb(null, true);
-        if (!allowedOrigins) return cb(null, true);
-        return allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("Not allowed by CORS"));
-      },
-      credentials: true,
-    })
-  );
+  const corsOptions = {
+    origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  };
+
+  app.use(cors(corsOptions));
+  app.options(/.*/, cors(corsOptions));
 
   app.use(express.json({ limit: "1mb" }));
 
@@ -197,9 +193,7 @@ async function startServer() {
     return authMiddleware(req, res, next);
   });
 
-  // --- API Routes ---
-
-  // ✅ Locations
+  // Locations
   app.get("/api/locations", (_req, res) => {
     const locations = db.prepare("SELECT * FROM locations ORDER BY id").all();
     res.json(locations);
@@ -304,14 +298,12 @@ async function startServer() {
     }
 
     const assignments = db
-      .prepare(
-        `
+      .prepare(`
         SELECT wt.*, t.firstName, t.lastName 
         FROM weekly_trainees wt
         JOIN trainees t ON wt.traineeId = t.id
         WHERE wt.date >= ? AND wt.date <= ?
-      `
-      )
+      `)
       .all(startDate, endDate);
 
     res.json(assignments);
@@ -364,7 +356,6 @@ async function startServer() {
     }
   });
 
-  // mark paid/unpaid + store payment info
   app.post("/api/weekly/payment", (req, res) => {
     const slotId = toInt(req.body?.slotId);
     const traineeId = toInt(req.body?.traineeId);
@@ -417,14 +408,12 @@ async function startServer() {
   // Debts / Payments
   app.get("/api/debts", (_req, res) => {
     const debts = db
-      .prepare(
-        `
+      .prepare(`
         SELECT d.*, t.firstName, t.lastName, t.phone, d.amount_agorot / 100.0 as amount
         FROM debts d
         JOIN trainees t ON d.traineeId = t.id
         ORDER BY d.date DESC
-      `
-      )
+      `)
       .all();
     res.json(debts);
   });
@@ -517,11 +506,11 @@ async function startServer() {
     res.json({ success: true, count: ids.length });
   });
 
-  // Reset Logic Trigger (Saturday or force)
+  // Reset Logic Trigger
   app.post("/api/reset-check", (req, res) => {
     const now = new Date();
     const israelTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
-    const day = israelTime.getDay(); // 0=Sun, 6=Sat
+    const day = israelTime.getDay();
     const isForce = req.body?.force === true;
 
     const todayStr = israelTime.toISOString().slice(0, 10);
@@ -581,14 +570,12 @@ async function startServer() {
     });
   }
 
-  // --- IMPORTANT FOR RAILWAY ---
   const PORT = Number(process.env.PORT || 3000);
   const HOST = "0.0.0.0";
 
   app.listen(PORT, HOST, () => {
     console.log(`[SERVER] Listening on http://${HOST}:${PORT}`);
     console.log(`[SERVER] NODE_ENV=${process.env.NODE_ENV}`);
-    console.log(`[SERVER] CORS_ORIGIN=${process.env.CORS_ORIGIN || "(not set)"}`);
     console.log(`[SERVER] DB=${DB_PATH}`);
   });
 }
